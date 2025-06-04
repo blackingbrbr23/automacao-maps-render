@@ -1,0 +1,6 @@
+selenium==4.7.2
+webdriver-manager==4.1.0
+requests==2.31.0
+openpyxl==3.1.2
+python-dateutil==2.8.2
+Flask==2.2.3

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+dados/
+*.xlsx
+status.txt
+log_erro_*.txt
