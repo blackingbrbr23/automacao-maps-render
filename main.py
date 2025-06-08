@@ -1,52 +1,114 @@
-# -------------------------------------------------------------------
-# main.py
-# -------------------------------------------------------------------
-# EntryPoint: faz loop contínuo rodando scanner e filterer a cada 1 hora
-# -------------------------------------------------------------------
-
+from flask import Flask, request, render_template_string, redirect, url_for, flash
 import os
 import time
+import re
+import subprocess
 import logging
-from scanner import run_scanner
-from filterer import run_filter
+import requests
+from selenium import webdriver
+from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.firefox.options import Options
+from webdriver_manager.firefox import GeckoDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s"
-)
-logger = logging.getLogger(__name__)
+# Config logging
+tlogging = logging.getLogger(__name__)
+tlogging.setLevel(logging.INFO)
 
-if __name__ == "__main__":
-    # Se você montou um Persistent Volume em /mnt/dados, defina DATA_DIR para "/mnt/dados"
-    # Caso contrário, usaremos uma pasta "dados/" relativa
-    DADOS_DIR = os.environ.get("DATA_DIR", None) or os.path.join(os.path.dirname(__file__), "dados")
-    os.makedirs(DADOS_DIR, exist_ok=True)
+app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET', 'changeme')
 
-    # Lista de palavras-chave: pode vir de variável de ambiente KEYWORDS ou estar fixa aqui
-    raw = os.environ.get("KEYWORDS", "")
-    if raw:
-        keywords = raw.split(";")
-    else:
-        # Caso queira deixar aqui mesmo, use ponto e vírgula para separar
-        keywords = [
-            "restaurante delivery Salvador",
-            "hotel praia Grande"
-        ]
+# Path to store results
+DATA_DIR = os.path.join(os.getcwd(), 'data')
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
 
-    while True:
-        logger.info("===== CICLO: coleta de links =====")
-        run_scanner(keywords, DADOS_DIR)
+# HTML template
+template = '''
+<!doctype html>
+<title>Pesquisa Google Meu Negócio</title>
+<h1>Pesquisa no Google Meu Negócio</h1>
+{% with messages = get_flashed_messages() %}
+  {% if messages %}
+    <ul style="color:red;">
+    {% for msg in messages %}<li>{{ msg }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
+<form method=post>
+  <label for=keywords>Palavras-chave (uma por linha):</label><br>
+  <textarea name=keywords rows=5 cols=40>{{ request.form.keywords or '' }}</textarea><br>
+  <button type=submit>Pesquisar</button>
+</form>
+{% if results %}
+  <h2>Resultados Encontrados</h2>
+  <ul>
+  {% for url in results %}
+    <li><a href="{{ url }}" target="_blank">{{ url }}</a></li>
+  {% endfor %}
+  </ul>
+{% endif %}
+'''  
 
-        logger.info("===== CICLO: filtragem de perfis =====")
-        run_filter(DADOS_DIR)
-
-        # Grava último horário de término em um arquivo “status.txt”
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    results = []
+    if request.method == 'POST':
+        raw = request.form.get('keywords', '').strip()
+        if not raw:
+            flash('Informe pelo menos uma palavra-chave')
+            return render_template_string(template, results=None)
+        keywords = [k.strip() for k in raw.splitlines() if k.strip()]
         try:
-            status_path = os.path.join(DADOS_DIR, "status.txt")
-            with open(status_path, "a") as f:
-                f.write(f"Ciclo finalizado em {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            results = run_search(keywords)
         except Exception as e:
-            logger.error(f"Não foi possível gravar status: {e}")
+            tlogging.error(f"Erro na busca: {e}")
+            flash('Erro ao executar pesquisa. Veja logs.')
+    return render_template_string(template, results=results)
 
-        logger.info("===== CICLO concluído. Aguardando 1 hora =====")
-        time.sleep(3600)
+
+def run_search(keywords):
+    """
+    Executa buscas headless no Google Maps para cada keyword e retorna lista de perfis.
+    """
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    service = Service(GeckoDriverManager().install())
+    driver = webdriver.Firefox(service=service, options=options)
+    driver.get('https://www.google.com/maps?hl=pt-BR')
+    time.sleep(3)
+    collected = set()
+    for kw in keywords:
+        tlogging.info(f'Buscando: {kw}')
+        campo = driver.find_element(By.ID, 'searchboxinput')
+        campo.clear()
+        campo.send_keys(kw)
+        campo.send_keys(Keys.ENTER)
+        time.sleep(5)
+        prev = 0
+        for _ in range(15):
+            perfis = driver.find_elements(By.CSS_SELECTOR, 'a.hfpxzc')
+            curr = len(perfis)
+            if curr == prev:
+                break
+            prev = curr
+            driver.execute_script('arguments[0].scrollIntoView();', perfis[-1])
+            time.sleep(2)
+        for p in perfis:
+            href = p.get_attribute('href')
+            if href:
+                collected.add(href)
+    driver.quit()
+    # opcional: salvar em arquivo
+    out_file = os.path.join(DATA_DIR, 'links.txt')
+    with open(out_file, 'w', encoding='utf-8') as f:
+        for url in sorted(collected):
+            f.write(url + '\n')
+    return sorted(collected)
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
