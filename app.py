@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, request, render_template_string, flash
 import os
 import time
@@ -64,6 +65,7 @@ def index():
             flash('Erro ao executar pesquisa. Verifique os logs.')
     return render_template_string(TEMPLATE, results=results)
 
+
 def run_search(keywords):
     """
     Executa busca headless no Google Maps para cada palavra-chave e retorna lista de perfis.
@@ -115,3 +117,15 @@ def run_search(keywords):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
+# Procfile
+# --
+# web: gunicorn app:app --bind 0.0.0.0:$PORT
+
+# requirements.txt
+# --
+# Flask>=2.0
+# selenium>=4.0
+# webdriver-manager>=3.0
+# requests>=2.25
+# gunicorn>=20.0
